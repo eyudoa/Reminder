@@ -1,0 +1,12 @@
+[設定]
+NextID=3
+
+[Task_1]
+Name=喝水提醒
+Time=09:30
+Status=待提醒
+
+[Task_2]
+Name=寫週報
+Time=
+Status=待提醒
