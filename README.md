@@ -1,4 +1,4 @@
-# WorkLifeApp (Reminder) v1.0.2 — User Manual
+# WorkLifeApp (Reminder) v1.0.0 — User Manual
 
 Release Date: 2026-11-24
 
