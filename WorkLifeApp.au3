@@ -1,4 +1,33 @@
-
+﻿;===============================================================================
+; 工作生活APP（Reminder） — 個人專用本機程式（AutoIt3）
+; 版本：v1.0.2
+;
+; 功能：
+;   1. 任務計劃：新增任務、設定提醒時間（HH:MM，24小時制，留空=不提醒）
+;   2. 查看任務：瀏覽全部任務、刪除任務
+;   3. F11 鍵切換全屏 / 視窗模式
+;   4. 背景每 10 秒偵測提醒時間，到點彈出右下角 Windows 系統桌面通知
+;      （每個任務只提醒一次；程式關閉即停止偵測）
+;
+; 資料：目標資料.ini（與本程式同一資料夾，不寫死任何磁碟路徑）
+;
+; v1.0.1 相對 v1.0.0 的修正（只修 bug，不新增功能）：
+;   [1] 任務名稱含半形「|」會讓任務清單欄位錯亂 → 寫入前轉為全形「｜」
+;   [2] 提醒時間輸入容錯：接受 9:30、09.30 等寫法，自動正規化為 09:30
+;   [3] 新增任務時若提醒時間已過，原本會在 10 秒內誤彈提醒 → 改記為「已錯過」，不再誤報
+;   [4] 同一輪偵測有多個任務到點時，通知會互相覆蓋只剩最後一個 → 合併為一則通知
+;   [5] 未選取任務就按刪除時，錯誤訊息蓋掉「共 N 個任務」計數 → 改用訊息框提示
+;   [6] F11 退出全屏時殘留 WS_POPUP 樣式，視窗可能還原成無邊框 → 還原時清除該樣式
+;   [7] 視窗標題列與側邊欄底部加上版本號，方便確認執行的是哪一版
+;
+; v1.0.2 相對 v1.0.1 的修正（只修 bug，不新增功能）：
+;   [8] 刪除任務後計數標籤被「已刪除任務（目前 N 個）」改寫，格式與清單不一致 → 不再覆寫，維持「共 N 個任務」
+;   [9] 任務清單欄寬總和超出可視寬度，底部一直出現水平滾動條 → 重新配寬，滾動條消失
+;   [10] 程式重啟後，INI 裡「今天已經過了卻還掛著待提醒」的任務永遠不會觸發也永遠不標記
+;        → 啟動時掃描一次：時間已過（12 小時內）的待提醒任務記為「已錯過」
+;   [11] 提醒時間輸入全形數字／全形冒號（０９：３０）一律被判格式錯誤 → 自動轉半形再正規化
+;   [12] 同一份程式可以同時開多個，兩邊會各彈一次提醒、並同時覆寫同一個 INI → 加單一實例鎖
+;===============================================================================
 #include <GUIConstantsEx.au3>
 #include <WindowsConstants.au3>
 #include <ListViewConstants.au3>
@@ -11,6 +40,9 @@
 #include <WinAPISysWin.au3>
 #include <WinAPISysInternals.au3>
 #include <WinAPIConstants.au3>
+
+Global Const $APP_NAME = "工作生活APP"
+Global Const $APP_VERSION = "1.0.2"
 
 Global $sDataFile = @ScriptDir & "\目標資料.ini"
 
@@ -28,15 +60,21 @@ Global $iPrevX, $iPrevY, $iPrevW, $iPrevH
 _Main()
 
 Func _Main()
+	; [v1.0.2] 單一實例鎖：避免同時開兩份，各彈一次提醒又一起覆寫同一個資料檔
+	If _Singleton($APP_NAME, 1) = 0 Then
+		MsgBox(0x40, $APP_NAME, "程式已經在執行中，請看工作列上既有的視窗。")
+		Return
+	EndIf
+
 	; 托盤圖示提示（通知彈窗由程式托盤發出）
-	TraySetToolTip("工作生活APP")
+	TraySetToolTip($APP_NAME & " v" & $APP_VERSION)
 
 	; 建立資料檔（若不存在）
 	If Not FileExists($sDataFile) Then
 		IniWrite($sDataFile, "設定", "NextID", "1")
 	EndIf
 
-	$hMain = GUICreate("工作生活APP", 760, 520)
+	$hMain = GUICreate($APP_NAME & " v" & $APP_VERSION, 760, 520)
 	GUISetBkColor(0xF5F5F5, $hMain)
 
 	;---------- 側邊欄 ----------
@@ -48,6 +86,10 @@ Func _Main()
 	GUICtrlSetFont($btnPlan, 11, 600)
 	$btnView = GUICtrlCreateButton("查看任務", 12, 110, 128, 44)
 	GUICtrlSetFont($btnView, 11, 600)
+
+	GUICtrlCreateLabel("v" & $APP_VERSION, 18, 480, 120, 18)
+	GUICtrlSetFont(-1, 8.5, 400)
+	GUICtrlSetColor(-1, 0x909090)
 
 	GUICtrlCreateLabel("", 152, 8, 1, 504, $SS_SUNKEN)
 
@@ -64,9 +106,9 @@ Func _Main()
 	;---------- 查看任務 檢視 ----------
 	$grpTasks = GUICtrlCreateGroup("全部任務", 172, 40, 560, 432)
 	$lstTasks = GUICtrlCreateListView("任務名稱|提醒時間|狀態", 188, 66, 528, 340)
-	_GUICtrlListView_SetColumnWidth($lstTasks, 0, 310)
-	_GUICtrlListView_SetColumnWidth($lstTasks, 1, 105)
-	_GUICtrlListView_SetColumnWidth($lstTasks, 2, 105)
+	_GUICtrlListView_SetColumnWidth($lstTasks, 0, 312)
+	_GUICtrlListView_SetColumnWidth($lstTasks, 1, 104)
+	_GUICtrlListView_SetColumnWidth($lstTasks, 2, 96)
 	_GUICtrlListView_SetExtendedListViewStyle($lstTasks, $LVS_EX_FULLROWSELECT)
 	$btnDelete = GUICtrlCreateButton("刪除任務", 188, 424, 120, 28)
 	$lblCount = GUICtrlCreateLabel("", 560, 428, 160, 22)
@@ -78,6 +120,9 @@ Func _Main()
 
 	AdlibRegister("_CheckReminders", 10000)
 	AdlibRegister("_CheckF11", 200)
+
+	; [v1.0.2] 啟動先掃一次：今天已經過去、卻還掛著「待提醒」的任務不會再自己觸發
+	_MarkMissedOnStart()
 
 	While 1
 		Switch GUIGetMsg()
@@ -130,6 +175,26 @@ Func _ShowView($iView)
 	EndIf
 EndFunc   ;==>_ShowView
 
+;---------- 提醒時間正規化（合法回傳 HH:MM，不合法回傳空字串） ----------
+Func _NormalizeTime($sRaw)
+	Local $s = StringStripWS($sRaw, 3)
+	If $s = "" Then Return ""
+	; [v1.0.2] 全形數字與全形標點一律先轉半形，否則「０９：３０」會被判格式錯誤
+	Local $aFull[10] = ["０", "１", "２", "３", "４", "５", "６", "７", "８", "９"]
+	For $i = 0 To 9
+		$s = StringReplace($s, $aFull[$i], String($i))
+	Next
+	$s = StringReplace($s, "．", ":")
+	$s = StringReplace($s, ".", ":")
+	$s = StringReplace($s, "：", ":")
+	If StringRegExp($s, "^\d{1,2}:\d{1,2}$") = 0 Then Return ""
+	Local $aParts = StringSplit($s, ":")
+	Local $iH = Int($aParts[1])
+	Local $iM = Int($aParts[2])
+	If $iH > 23 Or $iM > 59 Then Return ""
+	Return StringFormat("%02d:%02d", $iH, $iM)
+EndFunc   ;==>_NormalizeTime
+
 ;---------- 新增任務 ----------
 Func _AddTask()
 	Local $sName = StringStripWS(GUICtrlRead($inpName), 3)
@@ -137,25 +202,41 @@ Func _AddTask()
 		GUICtrlSetData($lblMsg, "請先輸入任務名稱。")
 		Return
 	EndIf
-	Local $sTime = StringStripWS(GUICtrlRead($inpTime), 3)
-	If $sTime <> "" Then
-		If Not StringRegExp($sTime, "^(?:[01]\d|2[0-3]):[0-5]\d$") Then
+	; [v1.0.1] 半形 | 是 ListView 的欄位分隔符，直接寫入會讓清單欄位錯亂
+	$sName = StringReplace($sName, "|", "｜")
+
+	Local $sTimeRaw = StringStripWS(GUICtrlRead($inpTime), 3)
+	Local $sTime = ""
+	If $sTimeRaw <> "" Then
+		$sTime = _NormalizeTime($sTimeRaw)
+		If $sTime = "" Then
 			GUICtrlSetData($lblMsg, "提醒時間格式不正確，請用 HH:MM（例如 14:30），或留空不提醒。")
 			Return
 		EndIf
+	EndIf
+
+	; [v1.0.1] 新增時若時間已過，記為「已錯過」，避免 10 秒內立刻誤彈提醒
+	Local $sNow = StringFormat("%02d:%02d", Int(@HOUR), Int(@MIN))
+	Local $sStatus = "待提醒"
+	Local $bMissed = False
+	If $sTime <> "" And $sTime < $sNow Then
+		$sStatus = "已錯過"
+		$bMissed = True
 	EndIf
 
 	Local $iNext = Int(IniRead($sDataFile, "設定", "NextID", "1"))
 	Local $sSection = "Task_" & $iNext
 	IniWrite($sDataFile, $sSection, "Name", $sName)
 	IniWrite($sDataFile, $sSection, "Time", $sTime)
-	IniWrite($sDataFile, $sSection, "Status", "待提醒")
+	IniWrite($sDataFile, $sSection, "Status", $sStatus)
 	IniWrite($sDataFile, "設定", "NextID", $iNext + 1)
 
 	GUICtrlSetData($inpName, "")
 	GUICtrlSetData($inpTime, "")
 	If $sTime = "" Then
 		GUICtrlSetData($lblMsg, "已新增任務：「" & $sName & "」（未設定提醒時間）")
+	ElseIf $bMissed Then
+		GUICtrlSetData($lblMsg, "已新增任務：「" & $sName & "」，提醒時間 " & $sTime & " 已過，本次不提醒。")
 	Else
 		GUICtrlSetData($lblMsg, "已新增任務：「" & $sName & "」，提醒時間 " & $sTime)
 	EndIf
@@ -188,7 +269,8 @@ EndFunc   ;==>_RefreshList
 Func _DeleteTask()
 	Local $sSel = _GUICtrlListView_GetSelectedIndices($lstTasks)
 	If $sSel = "" Then
-		GUICtrlSetData($lblCount, "請先選取要刪除的任務。")
+		; [v1.0.1] 原本直接寫進計數標籤，會把「共 N 個任務」蓋掉且不復原
+		MsgBox(0x30, $APP_NAME, "請先選取要刪除的任務。")
 		Return
 	EndIf
 	Local $iItem = Int($sSel)
@@ -196,14 +278,42 @@ Func _DeleteTask()
 	Local $sSection = $aTaskIds[$iItem]
 	If $sSection = "" Then Return
 	IniDelete($sDataFile, $sSection)
+	; [v1.0.2] _RefreshList 已經會更新「共 N 個任務」，不再另外覆寫計數標籤
 	_RefreshList()
-	GUICtrlSetData($lblCount, "已刪除任務（目前 " & $iTaskCount & " 個）")
 EndFunc   ;==>_DeleteTask
+
+;---------- 啟動掃描：把今天已過、仍掛待提醒的任務標為「已錯過」 ----------
+Func _MarkMissedOnStart()
+	Local $iNext = Int(IniRead($sDataFile, "設定", "NextID", "1"))
+	Local $iNow = Int(@HOUR) * 60 + Int(@MIN)
+	Local $iChanged = 0
+	For $i = 1 To $iNext - 1
+		Local $sSection = "Task_" & $i
+		Local $sName = IniRead($sDataFile, $sSection, "Name", "")
+		If $sName = "" Then ContinueLoop
+		Local $sTime = IniRead($sDataFile, $sSection, "Time", "")
+		If $sTime = "" Then ContinueLoop
+		If IniRead($sDataFile, $sSection, "Status", "待提醒") <> "待提醒" Then ContinueLoop
+		Local $aParts = StringSplit($sTime, ":")
+		If $aParts[0] < 2 Then ContinueLoop
+		Local $iTask = Int($aParts[1]) * 60 + Int($aParts[2])
+		Local $iDiff = $iNow - $iTask
+		; 過 1 分鐘到 12 小時 → 今天的時間已經過了，記為已錯過
+		; 超過 12 小時 → 視為「今晚還沒到」，保持待提醒
+		If $iDiff > 0 And $iDiff <= 720 Then
+			IniWrite($sDataFile, $sSection, "Status", "已錯過")
+			$iChanged += 1
+		EndIf
+	Next
+	If $iChanged > 0 And $iCurrentView = 2 Then _RefreshList()
+EndFunc   ;==>_MarkMissedOnStart
 
 ;---------- 背景偵測提醒（每 10 秒） ----------
 Func _CheckReminders()
 	Local $iNext = Int(IniRead($sDataFile, "設定", "NextID", "1"))
 	Local $sNow = StringFormat("%02d:%02d", Int(@HOUR), Int(@MIN))
+	Local $aDueNames[0]
+	Local $aDueTimes[0]
 	Local $bChanged = False
 	For $i = 1 To $iNext - 1
 		Local $sSection = "Task_" & $i
@@ -212,19 +322,32 @@ Func _CheckReminders()
 		Local $sTime = IniRead($sDataFile, $sSection, "Time", "")
 		Local $sStatus = IniRead($sDataFile, $sSection, "Status", "待提醒")
 		If $sTime <> "" And $sStatus = "待提醒" And $sNow >= $sTime Then
-			_FireNotification($sName, $sTime)
+			ReDim $aDueNames[UBound($aDueNames) + 1]
+			ReDim $aDueTimes[UBound($aDueTimes) + 1]
+			$aDueNames[UBound($aDueNames) - 1] = $sName
+			$aDueTimes[UBound($aDueTimes) - 1] = $sTime
 			IniWrite($sDataFile, $sSection, "Status", "已提醒")
 			$bChanged = True
 		EndIf
 	Next
+	If UBound($aDueNames) > 0 Then _FireNotification($aDueNames, $aDueTimes, $sNow)
 	If $bChanged And $iCurrentView = 2 Then _RefreshList()
 EndFunc   ;==>_CheckReminders
 
 ;---------- 彈出系統桌面通知（原生托盤通知，右下角系統彈窗，同進程、無外部依賴） ----------
-Func _FireNotification($sName, $sTime)
-	Local $sNow = StringFormat("%02d:%02d", Int(@HOUR), Int(@MIN))
-	; TrayTip(主要文字, 次要文字, 顯示秒數, 圖示類型 1=資訊)
-	TrayTip("任務提醒：" & $sName, "時間到！現在 " & $sNow & "（設定 " & $sTime & "）", 10, 1)
+Func _FireNotification($aNames, $aTimes, $sNow)
+	If UBound($aNames) = 1 Then
+		; TrayTip(主要文字, 次要文字, 顯示秒數, 圖示類型 1=資訊)
+		TrayTip("任務提醒：" & $aNames[0], "時間到！現在 " & $sNow & "（設定 " & $aTimes[0] & "）", 10, 1)
+		Return
+	EndIf
+	; [v1.0.1] 多個任務同時到點時合併為一則，避免後一則蓋掉前一則
+	Local $sList = ""
+	For $i = 0 To UBound($aNames) - 1
+		If $sList <> "" Then $sList &= "、"
+		$sList &= $aNames[$i]
+	Next
+	TrayTip("任務提醒：" & UBound($aNames) & " 個任務時間到", "現在 " & $sNow & "：" & $sList, 10, 1)
 EndFunc   ;==>_FireNotification
 
 ;---------- F11 全屏切換 ----------
@@ -250,7 +373,9 @@ Func _ToggleFullscreen()
 		_WinAPI_SetWindowPos($hMain, 0, 0, 0, @DesktopWidth, @DesktopHeight, 0x0020) ; SWP_FRAMECHANGED
 		$bFullscreen = True
 	Else
-		$iStyle = BitOR($iStyle, BitOR($WS_CAPTION, $WS_THICKFRAME))
+		; [v1.0.1] 先清掉全屏時加上的 WS_POPUP，否則還原後可能變成無邊框視窗
+		$iStyle = BitAND($iStyle, BitNOT($WS_POPUP))
+		$iStyle = BitOR(BitOR($iStyle, $WS_CAPTION), $WS_THICKFRAME)
 		_WinAPI_SetWindowLong($hMain, $GWL_STYLE, $iStyle)
 		_WinAPI_SetWindowPos($hMain, 0, $iPrevX, $iPrevY, $iPrevW, $iPrevH, 0x0020)
 		$bFullscreen = False
