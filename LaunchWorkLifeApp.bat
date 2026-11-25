@@ -1,33 +1,8 @@
 @echo off
-title WorkLife App Launcher v1.0.2
-cd /d "%~dp0"
-
-set "AUTOIT3="
-
-rem 1) registry - 64-bit view
-for /f "skip=2 tokens=2*" %%a in ('reg query "HKLM\SOFTWARE\AutoIt v3\AutoIt" /v InstallDir 2^>nul') do set "AUTOIT3=%%b\AutoIt3.exe"
-rem 2) registry - 32-bit view
-if not exist "%AUTOIT3%" for /f "skip=2 tokens=2*" %%a in ('reg query "HKLM\SOFTWARE\WOW6432Node\AutoIt v3\AutoIt" /v InstallDir 2^>nul') do set "AUTOIT3=%%b\AutoIt3.exe"
-rem 3) registry - current user
-if not exist "%AUTOIT3%" for /f "skip=2 tokens=2*" %%a in ('reg query "HKCU\SOFTWARE\AutoIt v3\AutoIt" /v InstallDir 2^>nul') do set "AUTOIT3=%%b\AutoIt3.exe"
-
-rem 4) common install locations
-if not exist "%AUTOIT3%" if exist "C:\Program Files (x86)\AutoIt3\AutoIt3.exe" set "AUTOIT3=C:\Program Files (x86)\AutoIt3\AutoIt3.exe"
-if not exist "%AUTOIT3%" if exist "C:\Program Files\AutoIt3\AutoIt3.exe" set "AUTOIT3=C:\Program Files\AutoIt3\AutoIt3.exe"
-
-rem 5) PATH
-if not exist "%AUTOIT3%" where /q AutoIt3.exe && set "AUTOIT3=AutoIt3.exe"
-if not exist "%AUTOIT3%" set "AUTOIT3="
-
-if "%AUTOIT3%"=="" (
-    echo [ERROR] AutoIt3.exe not found.
-    echo Please install AutoIt3 or add it to PATH, then run this launcher again.
+title Run Reminder App
+if exist "WorkLifeApp.au3" (
+    start "" "WorkLifeApp.au3"
+) else (
+    echo 找不到 WorkLifeApp.au3！請把這個bat和au3放在同一個資料夾。
     pause
-    exit /b 1
 )
-
-echo Launching WorkLife App v1.0.2 ...
-"%AUTOIT3%" "%~dp0WorkLifeApp.au3"
-echo.
-echo App exited. Press any key to close this window.
-pause
